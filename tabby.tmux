@@ -485,7 +485,7 @@ tmux set-hook -g window-linked "run-shell -b '$SIGNAL_CMD; $REFRESH_STATUS_SCRIP
 tmux set-hook -g window-unlinked "run-shell -b '$SIGNAL_CMD; $REFRESH_STATUS_SCRIPT; $EXIT_IF_NO_MAIN_WINDOWS_CMD'"
 tmux set-hook -g after-new-window "run-shell -b '$SIGNAL_CMD; $REFRESH_STATUS_SCRIPT; if [ -x \"$WORKFLOW_LOG_CMD\" ]; then \"$WORKFLOW_LOG_CMD\" tabby after-new-window \"window=#{window_id}\" 2>/dev/null || true; fi'"
 tmux set-hook -g after-resize-pane "run-shell -b '$HOOK_BIN on-pane-resize \"#{hook_pane}\"'"
-tmux set-hook -g after-select-window "run-shell -b '$SIGNAL_CMD; $REFRESH_STATUS_SCRIPT; $ENSURE_SIDEBAR_CMD \"#{session_id}\" \"#{window_id}\"; $CYCLE_PANE_BIN --ensure-content; if [ -x \"$WORKFLOW_LOG_CMD\" ]; then \"$WORKFLOW_LOG_CMD\" tabby after-select-window \"window=#{window_id}\" \"session=#{session_id}\" 2>/dev/null || true; fi; if [ -x \"$REGROUP_CMD\" ]; then \"$REGROUP_CMD\" 2>/dev/null || true; fi'"
+tmux set-hook -g after-select-window "run-shell -b '$SIGNAL_CMD; $REFRESH_STATUS_SCRIPT; $ENSURE_SIDEBAR_CMD \"#{session_id}\" \"#{window_id}\"; $CYCLE_PANE_BIN --ensure-content; if [ -x \"$WORKFLOW_LOG_CMD\" ]; then \"$WORKFLOW_LOG_CMD\" tabby after-select-window \"window=#{window_id}\" \"session=#{session_name}\" 2>/dev/null || true; fi; if [ -x \"$REGROUP_CMD\" ]; then \"$REGROUP_CMD\" 2>/dev/null || true; fi'"
 
 # prefix+, opens the per-pane actions menu (close, zoom, splits, break-pane,
 # swap, mark). Works in any window — the menu picks items based on whether the
