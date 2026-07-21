@@ -7450,6 +7450,7 @@ func (c *Coordinator) unparkWindow(windowID string) bool {
 	}
 	if isParkedWindow(windowID) {
 		origin := tmuxOutputTrimmed("display-message", "-p", "-t", windowID, "#{@tabby_min_origin}")
+		savedOrigin := origin
 		// Session IDs are ephemeral. A saved origin can disappear when the last
 		// visible window is minimized and later be recreated under the same name.
 		// Prefer the live dashboard session whenever the saved ID is absent or no
@@ -7457,8 +7458,7 @@ func (c *Coordinator) unparkWindow(windowID string) bool {
 		if origin == "" || exec.Command("tmux", "has-session", "-t", origin).Run() != nil {
 			origin = c.dashboardSession()
 			if origin == "" || exec.Command("tmux", "has-session", "-t", origin).Run() != nil {
-				coordinatorDebugLog.Printf("unparkWindow: no live origin for %s (saved=%q)", windowID,
-					tmuxOutputTrimmed("display-message", "-p", "-t", windowID, "#{@tabby_min_origin}"))
+				coordinatorDebugLog.Printf("unparkWindow: no live origin for %s (saved=%q)", windowID, savedOrigin)
 				return false
 			}
 		}
