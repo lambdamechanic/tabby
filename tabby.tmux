@@ -452,8 +452,10 @@ fi
 # Signal sidebar refresh: now inline via SIGNAL_CMD (USR1 to daemon PID)
 SIGNAL_SIDEBAR_SCRIPT="$SIGNAL_CMD"
 
-# Refresh status bar: trivial inline command (replaces refresh_status.sh)
-REFRESH_STATUS_SCRIPT="tmux refresh-client -S"
+# Refresh status when a client is available. Lifecycle hooks also fire for
+# background window creation, where tmux has no current client and
+# refresh-client legitimately exits 1; that is not a hook failure.
+REFRESH_STATUS_SCRIPT="tmux refresh-client -S 2>/dev/null || true"
 
 # All lifecycle scripts now handled by Go binaries via `tabby hook`
 HOOK_BIN="$CURRENT_DIR/bin/tabby hook"
@@ -462,6 +464,10 @@ RESTORE_SIDEBAR_CMD="$HOOK_BIN ensure-sidebar"
 STABILIZE_CLIENT_RESIZE_CMD="$HOOK_BIN stabilize-client-resize"
 SIGNAL_CLIENT_RESIZE_CMD="$HOOK_BIN signal-client-resize"
 FOCUS_RECOVERY_CMD="$HOOK_BIN restore-input-focus"
+# Optional workmux integration. Allow non-standard installations to override
+# the helper locations; hooks skip helpers that are not executable.
+REGROUP_CMD="${TABBY_REGROUP_CMD:-$HOME/.local/bin/tmux-regroup}"
+WORKFLOW_LOG_CMD="${TABBY_WORKFLOW_LOG_CMD:-$HOME/.local/bin/tmux-workflow-log}"
 
 # Apply group to new window: now handled by daemon (createNewWindowInCurrentGroup)
 
@@ -475,11 +481,11 @@ EXIT_IF_NO_MAIN_WINDOWS_CMD="$CURRENT_DIR/bin/tabby hook exit-if-no-main"
 # sidebar spawning, and renderer management.
 SIGNAL_CMD="$CURRENT_DIR/scripts/signal-daemon.sh"
 
-tmux set-hook -g window-linked "run-shell -b '$SIGNAL_CMD; tmux refresh-client -S'"
-tmux set-hook -g window-unlinked "run-shell -b '$SIGNAL_CMD; tmux refresh-client -S; $EXIT_IF_NO_MAIN_WINDOWS_CMD'"
-tmux set-hook -g after-new-window "run-shell -b '$SIGNAL_CMD; tmux refresh-client -S'"
+tmux set-hook -g window-linked "run-shell -b '$SIGNAL_CMD; $REFRESH_STATUS_SCRIPT; if [ -x \"$WORKFLOW_LOG_CMD\" ]; then \"$WORKFLOW_LOG_CMD\" tabby window-linked \"window=#{window_id}\" 2>/dev/null || true; fi'"
+tmux set-hook -g window-unlinked "run-shell -b '$SIGNAL_CMD; $REFRESH_STATUS_SCRIPT; $EXIT_IF_NO_MAIN_WINDOWS_CMD'"
+tmux set-hook -g after-new-window "run-shell -b '$SIGNAL_CMD; $REFRESH_STATUS_SCRIPT; if [ -x \"$WORKFLOW_LOG_CMD\" ]; then \"$WORKFLOW_LOG_CMD\" tabby after-new-window \"window=#{window_id}\" 2>/dev/null || true; fi'"
 tmux set-hook -g after-resize-pane "run-shell -b '$HOOK_BIN on-pane-resize \"#{hook_pane}\"'"
-tmux set-hook -g after-select-window "run-shell -b '$SIGNAL_CMD; tmux refresh-client -S; $ENSURE_SIDEBAR_CMD \"#{session_id}\" \"#{window_id}\"; $CYCLE_PANE_BIN --ensure-content'"
+tmux set-hook -g after-select-window "run-shell -b '$SIGNAL_CMD; $REFRESH_STATUS_SCRIPT; $ENSURE_SIDEBAR_CMD \"#{session_id}\" \"#{window_id}\"; $CYCLE_PANE_BIN --ensure-content; if [ -x \"$WORKFLOW_LOG_CMD\" ]; then \"$WORKFLOW_LOG_CMD\" tabby after-select-window \"window=#{window_id}\" \"session=#{session_name}\" 2>/dev/null || true; fi; if [ -x \"$REGROUP_CMD\" ]; then \"$REGROUP_CMD\" 2>/dev/null || true; fi'"
 
 # prefix+, opens the per-pane actions menu (close, zoom, splits, break-pane,
 # swap, mark). Works in any window — the menu picks items based on whether the

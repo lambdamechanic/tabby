@@ -447,6 +447,17 @@ func windowFocusRestoreTarget(activeWindowID, pendingNewWindowID string) string 
 	return pendingNewWindowID
 }
 
+// refreshFocusRestoreTarget returns the window that a grouped refresh must
+// restore after renumbering. Grouping is presentation-only: move-window may
+// change indices, but it must never change which stable window ID the user is
+// viewing.
+func refreshFocusRestoreTarget(beforeWindowID, afterWindowID string, moveCount int) string {
+	if moveCount == 0 || beforeWindowID == "" || afterWindowID == "" || beforeWindowID == afterWindowID {
+		return ""
+	}
+	return beforeWindowID
+}
+
 // preferredWindowFocusTarget returns the window the post-spawn focus-restore
 // should re-target, or "" to skip the restore. The original implementation
 // compared the new window against an unscoped `display-message -p
@@ -4013,6 +4024,11 @@ func (c *Coordinator) RefreshWindows() {
 	// blocking subsequent tasks that need stateMu.RLock() (e.g. handleWidthSync
 	// via BroadcastRender), causing LOOP_STALL and daemon termination.
 
+	// Snapshot focus before any refresh operation. Some of the operations below
+	// (especially grouped move-window renumbering) can silently change tmux's
+	// current window without firing after-select-window.
+	activeWindowID := tmuxOutputTrimmed("display-message", "-p", "#{window_id}")
+
 	newCfg := c.loadConfigCached()
 
 	// Peek catch-all: re-park a surfaced minimized window that lost focus via a
@@ -4096,8 +4112,6 @@ func (c *Coordinator) RefreshWindows() {
 
 	c.windows = windows
 
-	activeWindowID := tmuxOutputTrimmed("display-message", "-p", "#{window_id}")
-
 	// Auto-sync window names from active pane title, unless name is locked.
 	// Collects pending rename ops for execution after unlock.
 	pendingRenames := c.syncWindowNames()
@@ -4144,38 +4158,17 @@ func (c *Coordinator) RefreshWindows() {
 
 	// Execute deferred window move ops outside the lock.
 	for _, op := range pendingMoves {
-		tmuxRun("move-window", "-s", op.src, "-t", op.dst)
+		// -d preserves the attached client's current window while grouped
+		// windows are renumbered (especially important for background workmuxes).
+		tmuxRun("move-window", "-d", "-s", op.src, "-t", op.dst)
 	}
-	// Restore focus to the pending new window ONLY when this RefreshWindows
-	// actually performed window renumbering via move-window — that's the
-	// scenario the restore was originally added for (tmux's renumbering
-	// briefly drops the active marker, and we need to re-assert it).
-	//
-	// Firing on every RefreshWindows during the 3-second "ready" hold (the
-	// previous behaviour) caused the post-`+`-tap cycling bug on phone with
-	// sidebar detached: an unrelated session-active-window flip (driven by
-	// the after-kill-pane storm tmux runs while the new window's pane
-	// layout settles) was detected as drift, restored via select-window,
-	// which fed activity back into the system, etc. The restore-on-every-
-	// refresh was structurally broken for any case other than move-window
-	// renumbering. See coordinator.go preferredWindowFocusTarget for the
-	// detection-side notes.
-	//
-	// Single-session multi-client setups don't actually support per-client
-	// current windows in tmux 3.x — `switch-client -c <tty> -t <window>`
-	// is equivalent to `select-window` for the session — so we cannot
-	// scope the restore to just the firing client to dodge the cycle.
 	if len(pendingMoves) > 0 {
-		if focusTarget := preferredWindowFocusTarget(c, activeWindowID); focusTarget != "" {
-			restoreWindowFocus(focusTarget)
-			logEvent("RESTORE_WINDOW_FOCUS target=%s active=%s pending_moves=%d", focusTarget, activeWindowID, len(pendingMoves))
-		}
-	} else {
-		// Diagnostic: confirm we're skipping the restore on the cycling path.
-		// Cheap because preferredWindowFocusTarget is only consulted to log.
-		status := c.NewWindowStatus()
-		if status.State == "ready" && status.WindowID != "" {
-			logEvent("RESTORE_WINDOW_FOCUS_SKIP reason=no_pending_moves pending=%s active=%s firing_tty=%s age_ms=%d", status.WindowID, activeWindowID, status.FiringTTY, time.Since(status.Created).Milliseconds())
+		postRefreshWindowID := tmuxOutputTrimmed("display-message", "-p", "#{window_id}")
+		if focusTarget := refreshFocusRestoreTarget(activeWindowID, postRefreshWindowID, len(pendingMoves)); focusTarget != "" {
+			logEvent("GROUP_REFRESH_RESTORE_ACTIVE before=%s after=%s pending_moves=%d", activeWindowID, postRefreshWindowID, len(pendingMoves))
+			if err := tmuxRun("select-window", "-t", focusTarget); err != nil {
+				logEvent("GROUP_REFRESH_RESTORE_ACTIVE_FAILED target=%s err=%v", focusTarget, err)
+			}
 		}
 	}
 }
@@ -7618,18 +7611,30 @@ func (c *Coordinator) surfaceWindow(windowID string) bool {
 // unparkWindow fully un-minimizes: moves the window back to its origin session
 // (if parked) and clears every parked marker. Safe to call whether parked or
 // surfaced-but-flagged.
-func (c *Coordinator) unparkWindow(windowID string) {
+func (c *Coordinator) unparkWindow(windowID string) bool {
 	windowID = strings.TrimSpace(windowID)
 	if windowID == "" {
-		return
+		return false
 	}
 	if isParkedWindow(windowID) {
 		origin := tmuxOutputTrimmed("display-message", "-p", "-t", windowID, "#{@tabby_min_origin}")
-		if origin == "" {
+		savedOrigin := origin
+		// Session IDs are ephemeral. A saved origin can disappear when the last
+		// visible window is minimized and later be recreated under the same name.
+		// Prefer the live dashboard session whenever the saved ID is absent or no
+		// longer resolves.
+		if origin == "" || exec.Command("tmux", "has-session", "-t", origin).Run() != nil {
 			origin = c.dashboardSession()
+			if origin == "" || exec.Command("tmux", "has-session", "-t", origin).Run() != nil {
+				coordinatorDebugLog.Printf("unparkWindow: no live origin for %s (saved=%q)", windowID, savedOrigin)
+				return false
+			}
 		}
 		if err := exec.Command("tmux", "move-window", "-d", "-s", windowID, "-t", origin+":").Run(); err != nil {
 			coordinatorDebugLog.Printf("unparkWindow: move-window failed for %s: %v", windowID, err)
+			// Keep the minimize/origin markers intact. Clearing them after a failed
+			// physical move creates an unmarked orphan in _tabby_minimized.
+			return false
 		}
 	}
 	exec.Command("tmux", "set-window-option", "-t", windowID, "-u", "@tabby_minimized").Run()
@@ -7637,6 +7642,7 @@ func (c *Coordinator) unparkWindow(windowID string) {
 	exec.Command("tmux", "set-window-option", "-t", windowID, "-u", "@tabby_min_dir").Run()
 	cleanupMinimizedSessionIfEmpty()
 	coordinatorDebugLog.Printf("unparkWindow: unminimized %s", windowID)
+	return true
 }
 
 // clearPeekIf drops the peek tracking when windowID is the currently-peeked
@@ -19087,7 +19093,7 @@ func (c *Coordinator) handleKeyInput(clientID string, input *daemon.InputPayload
 			c.stateMu.Unlock()
 			// Execute deferred window move ops outside the lock.
 			for _, op := range moves {
-				tmuxRun("move-window", "-s", op.src, "-t", op.dst)
+				tmuxRun("move-window", "-d", "-s", op.src, "-t", op.dst)
 			}
 			// Mirror the gating in RefreshWindows: only restore focus when
 			// move-window actually renumbered something, since that's the
