@@ -7456,11 +7456,11 @@ func (c *Coordinator) unparkWindow(windowID string) bool {
 		// longer resolves.
 		if origin == "" || exec.Command("tmux", "has-session", "-t", origin).Run() != nil {
 			origin = c.dashboardSession()
-		}
-		if origin == "" || exec.Command("tmux", "has-session", "-t", origin).Run() != nil {
-			coordinatorDebugLog.Printf("unparkWindow: no live origin for %s (saved=%q)", windowID,
-				tmuxOutputTrimmed("display-message", "-p", "-t", windowID, "#{@tabby_min_origin}"))
-			return false
+			if origin == "" || exec.Command("tmux", "has-session", "-t", origin).Run() != nil {
+				coordinatorDebugLog.Printf("unparkWindow: no live origin for %s (saved=%q)", windowID,
+					tmuxOutputTrimmed("display-message", "-p", "-t", windowID, "#{@tabby_min_origin}"))
+				return false
+			}
 		}
 		if err := exec.Command("tmux", "move-window", "-d", "-s", windowID, "-t", origin+":").Run(); err != nil {
 			coordinatorDebugLog.Printf("unparkWindow: move-window failed for %s: %v", windowID, err)
