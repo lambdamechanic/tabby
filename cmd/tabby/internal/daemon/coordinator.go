@@ -3997,11 +3997,13 @@ func (c *Coordinator) RefreshWindows() {
 		tmuxRun("move-window", "-d", "-s", op.src, "-t", op.dst)
 	}
 	if len(pendingMoves) > 0 {
-		postRefreshWindowID := tmuxOutputTrimmed("display-message", "-p", "#{window_id}")
-		if focusTarget := refreshFocusRestoreTarget(activeWindowID, postRefreshWindowID, len(pendingMoves)); focusTarget != "" {
-			logEvent("GROUP_REFRESH_RESTORE_ACTIVE before=%s after=%s pending_moves=%d", activeWindowID, postRefreshWindowID, len(pendingMoves))
-			_ = tmuxRun("select-window", "-t", focusTarget)
+	postRefreshWindowID := tmuxOutputTrimmed("display-message", "-p", "#{window_id}")
+	if focusTarget := refreshFocusRestoreTarget(activeWindowID, postRefreshWindowID, len(pendingMoves)); focusTarget != "" {
+		logEvent("GROUP_REFRESH_RESTORE_ACTIVE before=%s after=%s pending_moves=%d", activeWindowID, postRefreshWindowID, len(pendingMoves))
+		if err := tmuxRun("select-window", "-t", focusTarget); err != nil {
+			logEvent("GROUP_REFRESH_RESTORE_ACTIVE_FAILED target=%s err=%v", focusTarget, err)
 		}
+	}
 	}
 }
 
