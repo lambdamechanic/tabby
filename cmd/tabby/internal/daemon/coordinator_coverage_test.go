@@ -3,6 +3,7 @@ package daemon
 import (
 	"io"
 	"log"
+	"strings"
 	"testing"
 
 	"github.com/brendandebeasi/tabby/pkg/config"
@@ -209,6 +210,26 @@ func TestSyncWindowIndices_MismatchReturnsPending(t *testing.T) {
 	pending := c.syncWindowIndices()
 	assert.NotNil(t, pending)
 	assert.Greater(t, len(pending), 0)
+	for _, move := range pending {
+		assert.Contains(t, move.dst, "test-session:")
+		if strings.Contains(move.src, ":") {
+			assert.Contains(t, move.src, "test-session:")
+		}
+	}
+}
+
+func TestSessionWindowTargetScopesIndex(t *testing.T) {
+	assert.Equal(t, "$0:17", sessionWindowTarget("$0", 17))
+	assert.Equal(t, "test-session:8000", sessionWindowTarget(" test-session ", 8000))
+	assert.Equal(t, ":3", sessionWindowTarget("", 3))
+}
+
+func TestExpectedLimboWindows(t *testing.T) {
+	assert.True(t, isExpectedLimboWindow("0", "bash"))
+	assert.True(t, isExpectedLimboWindow("12", "_tabby_stash_42"))
+	assert.True(t, isExpectedLimboWindow("13", "_tabby_content_42"))
+	assert.False(t, isExpectedLimboWindow("17", "codex"))
+	assert.False(t, isExpectedLimboWindow("18", "claude"))
 }
 
 func TestBuildPaneHeaderColorArgs_EmptyGrouped(t *testing.T) {

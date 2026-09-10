@@ -6272,6 +6272,18 @@ type tmuxWindowMove struct {
 	winID string
 }
 
+// sessionWindowTarget returns an explicitly session-scoped tmux window target.
+// Bare targets such as ":17" resolve through tmux's implicit current session.
+// That is unsafe once Tabby creates _tabby_limbo: a daemon-side tmux command can
+// then resolve the destination into limbo and relocate a real user window there.
+func sessionWindowTarget(sessionID string, index int) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return fmt.Sprintf(":%d", index)
+	}
+	return fmt.Sprintf("%s:%d", sessionID, index)
+}
+
 // movesInclude reports whether windowID was relocated by this batch. The
 // post-spawn focus restore is only correct for the window the renumber
 // actually displaced; firing it for an unrelated regroup (an ssh tab picking
@@ -6418,19 +6430,19 @@ func (c *Coordinator) syncWindowIndices() []tmuxWindowMove {
 			tempCounter++
 			pending = append(pending, tmuxWindowMove{
 				src:   cycle[0].id,
-				dst:   fmt.Sprintf("%s:%d", c.sessionID, tmp),
+				dst:   sessionWindowTarget(c.sessionID, tmp),
 				winID: cycle[0].id,
 			})
 			for i := len(cycle) - 1; i >= 1; i-- {
 				pending = append(pending, tmuxWindowMove{
 					src:   cycle[i].id,
-					dst:   fmt.Sprintf("%s:%d", c.sessionID, cycle[i].desiredIndex),
+					dst:   sessionWindowTarget(c.sessionID, cycle[i].desiredIndex),
 					winID: cycle[i].id,
 				})
 			}
 			pending = append(pending, tmuxWindowMove{
-				src:   fmt.Sprintf("%s:%d", c.sessionID, tmp),
-				dst:   fmt.Sprintf("%s:%d", c.sessionID, cycle[0].desiredIndex),
+				src:   sessionWindowTarget(c.sessionID, tmp),
+				dst:   sessionWindowTarget(c.sessionID, cycle[0].desiredIndex),
 				winID: cycle[0].id,
 			})
 		} else {
@@ -6441,7 +6453,7 @@ func (c *Coordinator) syncWindowIndices() []tmuxWindowMove {
 			for i := len(cycle) - 1; i >= 0; i-- {
 				pending = append(pending, tmuxWindowMove{
 					src:   cycle[i].id,
-					dst:   fmt.Sprintf("%s:%d", c.sessionID, cycle[i].desiredIndex),
+					dst:   sessionWindowTarget(c.sessionID, cycle[i].desiredIndex),
 					winID: cycle[i].id,
 				})
 			}
@@ -9338,10 +9350,49 @@ func cleanupLimboSessionIfEmpty() {
 	if sidebar || content {
 		return // sidebar OR content stashes still parked — keep the holder alive
 	}
+	// Fail closed if a real window was ever moved into limbo. The only ordinary
+	// window allowed there is the index-0 placeholder created by ensureLimboSession.
+	// Killing the session with any other unmarked window present would destroy the
+	// user's shell/agent process tree along with it.
+	if unexpected, ok := unexpectedLimboWindows(); !ok || len(unexpected) > 0 {
+		logEvent("LIMBO_CLEANUP_SKIP_UNEXPECTED windows=%s", strings.Join(unexpected, ","))
+		coordinatorDebugLog.Printf("cleanupLimboSessionIfEmpty: refusing to kill %s; unexpected windows: %s",
+			sidebarLimboSession, strings.Join(unexpected, ","))
+		return
+	}
 	if err := tmuxCmd("has-session", "-t", sidebarLimboSession).Run(); err == nil {
 		tmuxCmd("kill-session", "-t", sidebarLimboSession).Run()
 		coordinatorDebugLog.Printf("cleanupLimboSessionIfEmpty: killed %s", sidebarLimboSession)
 	}
+}
+
+// unexpectedLimboWindows lists windows that are neither recognized holding
+// windows nor the placeholder at index 0. It deliberately treats every other
+// window as user data and blocks destructive limbo cleanup.
+func unexpectedLimboWindows() ([]string, bool) {
+	out, err := tmuxCmd("list-windows", "-t", sidebarLimboSession, "-F",
+		"#{window_index}|#{window_id}|#{window_name}").Output()
+	if err != nil {
+		return nil, false // An unreadable listing must not permit cleanup.
+	}
+	var unexpected []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), "|", 3)
+		if len(parts) != 3 {
+			return nil, false
+		}
+		index, windowID, name := parts[0], parts[1], parts[2]
+		if isExpectedLimboWindow(index, name) {
+			continue
+		}
+		unexpected = append(unexpected, fmt.Sprintf("%s:%s", windowID, name))
+	}
+	return unexpected, true
+}
+
+func isExpectedLimboWindow(index, name string) bool {
+	return strings.TrimSpace(index) == "0" || strings.HasPrefix(name, sidebarStashWindowPrefix) ||
+		strings.HasPrefix(name, contentStashWindowPrefix)
 }
 
 // anyWindowNamedWithPrefix reports whether any window on the server carries a name

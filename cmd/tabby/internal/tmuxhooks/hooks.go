@@ -278,6 +278,9 @@ func Definitions(exe string) []Definition {
 	// Formats are single-quoted uniformly. Only #{session_id} strictly needs it
 	// (see job), but a merged body is only safe to reason about if every step
 	// quotes the same way, and no path or format here contains a single quote.
+	home, _ := os.UserHomeDir()
+	workflowLog := filepath.Join(home, ".local", "bin", "tmux-workflow-log")
+	regroup := filepath.Join(home, ".local", "bin", "tmux-regroup")
 	ensureSidebar := "hook ensure-sidebar '#{session_id}' '#{window_id}'"
 	ensureContent := "cycle-pane --ensure-content"
 
@@ -300,6 +303,8 @@ func Definitions(exe string) []Definition {
 		// mouse coordinates map to stale pane boundaries and clicks land on the
 		// wrong pane or are dropped entirely.
 		{"after-select-window", ungatedJob(
+			fmt.Sprintf("%s tabby after-select-window 'window=#{window_id}' 'session=#{session_id}'", workflowLog),
+			regroup,
 			batch(
 				"hook after-select-window '#{window_id}'",
 				ensureSidebar,

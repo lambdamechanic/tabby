@@ -232,6 +232,14 @@ func Run(args []string) int {
 				if position != "right" {
 					splitArgs = append(splitArgs, "-b")
 				}
+				// Pin the sidebar pane's cwd: without -c tmux inherits the
+				// invoking client's working directory, which is unstable, and
+				// external observers (mayord's component-window validation)
+				// trust a sidebar pane only when pane_current_path is exactly
+				// $HOME.
+				if home, homeErr := os.UserHomeDir(); homeErr == nil && home != "" {
+					splitArgs = append(splitArgs, "-c", home)
+				}
 				splitArgs = append(splitArgs,
 					"-f", "-l", strconv.Itoa(width), "-P", "-F", "#{pane_id}", cmdStr,
 				)

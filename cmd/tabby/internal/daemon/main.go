@@ -51,6 +51,29 @@ var (
 
 // rotateLogFile rotates a log file if it exceeds maxBytes.
 // Keeps one .prev backup. Returns nil on success or if file is small enough.
+// sidebarCwdArgs pins spawned decoration panes to $HOME. Without an explicit
+// -c, tmux gives the new pane the invoking client's working directory — for
+// daemon-spawned sidebars that is wherever the daemon happened to start (e.g.
+// ~/.config/tabby), which is unstable across restarts. External observers
+// (mayord's component-window validation) identify a trusted sidebar partly by
+// pane_current_path being exactly $HOME, so the cwd must be deterministic.
+func sidebarCwdArgs() []string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return nil
+	}
+	return []string{"-c", home}
+}
+
+// isHeadlessWorkerWindow reports whether a window belongs to a headless
+// daemon-managed worker (workmux/mayord molecule components, named
+// mol-<32-hex-run-id>). These windows get no sidebar decoration.
+var headlessWorkerWindowPattern = regexp.MustCompile(`^mol-[0-9a-f]{32}$`)
+
+func isHeadlessWorkerWindow(name string) bool {
+	return headlessWorkerWindowPattern.MatchString(name)
+}
+
 func rotateLogFile(path string, maxBytes int64) {
 	info, err := os.Stat(path)
 	if err != nil || info.Size() <= maxBytes {
@@ -691,6 +714,14 @@ func spawnRenderersForNewWindows(server *daemon.Server, sessionID string, window
 			logEvent("SPAWN_CHECK window=%s result=skip_dashboard", windowID)
 			continue
 		}
+		// Headless daemon worker windows (workmux/mayord `mol-<runhex>`
+		// components) host non-interactive agents nobody watches; decorating
+		// them costs one renderer process per window, and mayord validates
+		// their exact pane set externally.
+		if isHeadlessWorkerWindow(win.Name) {
+			logEvent("SPAWN_CHECK window=%s result=skip_worker_window", windowID)
+			continue
+		}
 		// Skip if already has a renderer
 		if connectedClients[windowID] {
 			logEvent("SPAWN_CHECK window=%s result=skip_has_client", windowID)
@@ -797,7 +828,10 @@ func spawnRenderersForNewWindows(server *daemon.Server, sessionID string, window
 			debugFlag = "-debug"
 		}
 		cmdStr := fmt.Sprintf("printf '\\033[?25l\\033[2J\\033[H' && %s -session '%s' -window '%s' %s", rendererBin, sessionID, windowID, debugFlag)
-		cmd := tmuxCmd("split-window", "-d", "-t", firstPane, "-h", "-b", "-f", "-l", fmt.Sprintf("%d", width), "-P", "-F", "#{pane_id}", cmdStr)
+		spawnArgs := []string{"split-window", "-d", "-t", firstPane, "-h", "-b", "-f", "-l", fmt.Sprintf("%d", width)}
+		spawnArgs = append(spawnArgs, sidebarCwdArgs()...)
+		spawnArgs = append(spawnArgs, "-P", "-F", "#{pane_id}", cmdStr)
+		cmd := tmuxCmd(spawnArgs...)
 		paneOut, err := cmd.CombinedOutput()
 		if err != nil {
 			debugLog.Printf("Failed to spawn renderer: %v, output: %s", err, string(paneOut))
@@ -2031,7 +2065,10 @@ func watchdogCheckRenderers(server *daemon.Server, sessionID string, coordinator
 					debugFlag = "-debug"
 				}
 				cmdStr := fmt.Sprintf("%s -session '%s' -window '%s' %s", rendererBin, sessionID, windowID, debugFlag)
-				tmuxCmd("split-window", "-d", "-t", windowID, "-h", "-b", "-l", fmt.Sprintf("%d", globalWidth), cmdStr).Run()
+				respawnArgs := []string{"split-window", "-d", "-t", windowID, "-h", "-b", "-l", fmt.Sprintf("%d", globalWidth)}
+				respawnArgs = append(respawnArgs, sidebarCwdArgs()...)
+				respawnArgs = append(respawnArgs, cmdStr)
+				tmuxCmd(respawnArgs...).Run()
 			}
 			continue
 		}
@@ -2059,7 +2096,10 @@ func watchdogCheckRenderers(server *daemon.Server, sessionID string, coordinator
 					debugFlag = "-debug"
 				}
 				cmdStr := fmt.Sprintf("%s -session '%s' -window '%s' %s", rendererBin, sessionID, windowID, debugFlag)
-				tmuxCmd("split-window", "-d", "-t", windowID, "-h", "-b", "-l", fmt.Sprintf("%d", globalWidth), cmdStr).Run()
+				respawnArgs := []string{"split-window", "-d", "-t", windowID, "-h", "-b", "-l", fmt.Sprintf("%d", globalWidth)}
+				respawnArgs = append(respawnArgs, sidebarCwdArgs()...)
+				respawnArgs = append(respawnArgs, cmdStr)
+				tmuxCmd(respawnArgs...).Run()
 			}
 			continue
 		}
@@ -2086,7 +2126,10 @@ func watchdogCheckRenderers(server *daemon.Server, sessionID string, coordinator
 				debugFlag = "-debug"
 			}
 			cmdStr := fmt.Sprintf("printf '\\033[?25l\\033[2J\\033[H' && %s -session '%s' -window '%s' %s", rendererBin, sessionID, windowID, debugFlag)
-			tmuxCmd("split-window", "-d", "-t", windowID, "-h", "-b", "-f", "-l", fmt.Sprintf("%d", globalWidth), cmdStr).Run()
+			respawnArgs := []string{"split-window", "-d", "-t", windowID, "-h", "-b", "-f", "-l", fmt.Sprintf("%d", globalWidth)}
+			respawnArgs = append(respawnArgs, sidebarCwdArgs()...)
+			respawnArgs = append(respawnArgs, cmdStr)
+			tmuxCmd(respawnArgs...).Run()
 		}
 	}
 }
@@ -3453,7 +3496,7 @@ func Run(args []string) int {
 			SigCh:               sigCh,
 		})
 		go runBackoffTicker(loopCtx, loop.geomTickInterval, func() { loop.submitCoalesced(&loop.flags.geom, ClientGeomTickEvent{}) })
-		go runTicker(loopCtx, 100*time.Millisecond, func() { loop.submitCoalesced(&loop.flags.anim, AnimationTickEvent{}) })
+		go runTicker(loopCtx, 2500*time.Millisecond, func() { loop.submitCoalesced(&loop.flags.anim, AnimationTickEvent{}) })
 		go runTicker(loopCtx, 3*time.Second, func() { loop.submitCoalesced(&loop.flags.window, WindowCheckTickEvent{}) })
 		go runTicker(loopCtx, 30*time.Second, func() { loop.submitCoalesced(&loop.flags.refresh, RefreshTickEvent{}) })
 		go runTicker(loopCtx, 5*time.Second, func() { loop.submitCoalesced(&loop.flags.git, GitTickEvent{}) })

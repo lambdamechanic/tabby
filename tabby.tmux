@@ -510,6 +510,8 @@ EXIT_IF_NO_MAIN_WINDOWS_CMD="$CURRENT_DIR/bin/tabby hook exit-if-no-main"
 # nonzero, so a single missing client used to turn into a screenful of noise on
 # every window switch.
 NOTIFY_CMD="$CURRENT_DIR/scripts/hook-notify.sh"
+REGROUP_CMD="$HOME/.local/bin/tmux-regroup"
+WORKFLOW_LOG_CMD="$HOME/.local/bin/tmux-workflow-log"
 ENSURE_DAEMON_CMD="$CURRENT_DIR/scripts/ensure-daemon.sh"
 # Hook bodies are best-effort housekeeping and nothing consumes their status,
 # so every step ends in `true` — hook-notify.sh included, whose own `exit 0`
@@ -619,9 +621,9 @@ daemon_gated_hook() {
 # shell's own name). Shell double quotes do not stop it. #{window_id} and
 # #{client_tty} are safe either way, but quoting every format the same way is
 # what makes a merged body possible to reason about.
-daemon_gated_hook window-linked "if-shell -b \"$NOTIFY_CMD '#{session_id}' '#{session_attached}'; $HOOK_OK\" \"\""
+daemon_gated_hook window-linked "if-shell -b \"$WORKFLOW_LOG_CMD tabby window-linked 'window=#{window_id}'; $NOTIFY_CMD '#{session_id}' '#{session_attached}'; $HOOK_OK\" \"\""
 daemon_gated_hook window-unlinked "if-shell -b \"$NOTIFY_CMD '#{session_id}' '#{session_attached}'; $EXIT_IF_NO_MAIN_WINDOWS_CMD; $HOOK_OK\" \"\""
-daemon_gated_hook after-new-window "if-shell -b \"$NOTIFY_CMD '#{session_id}' '#{session_attached}'; $HOOK_OK\" \"\""
+daemon_gated_hook after-new-window "if-shell -b \"$WORKFLOW_LOG_CMD tabby after-new-window 'window=#{window_id}'; $REGROUP_CMD --window '#{window_id}' || true; $NOTIFY_CMD '#{session_id}' '#{session_attached}'; $HOOK_OK\" \"\""
 
 # prefix+, opens the per-pane actions menu (close, zoom, splits, break-pane,
 # swap, mark). Works in any window — the menu picks items based on whether the
