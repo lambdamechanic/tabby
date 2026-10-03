@@ -5618,7 +5618,7 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 		if win.Busy {
 			// Find which pane the hook likely refers to
 			for _, p := range aiPanes {
-				if tmux.HasSpinner(p.Title) {
+				if tmux.HasSpinner(p.Title) || uahWorkingTitle(*p) {
 					hookBusyPaneID = p.ID
 					break
 				}
@@ -5646,7 +5646,7 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 		if win.Busy {
 			anySpinner := false
 			for _, p := range aiPanes {
-				if tmux.HasSpinner(p.Title) {
+				if tmux.HasSpinner(p.Title) || uahWorkingTitle(*p) {
 					anySpinner = true
 					break
 				}
@@ -5753,6 +5753,18 @@ func (c *Coordinator) processAIToolStates(preloaded *processTree) []tmuxSetOptio
 			// Hook-active bypass: when hooks previously controlled this pane
 			// and now say idle, trust that unless spinner overrides.
 			if c.hookPaneActive[pid] && !win.Busy && !hasSpinner {
+				// UAH's native hooks explicitly distinguish Stop (bell) from
+				// SessionEnd (clear). Once those hooks control a pane, preserve
+				// their terminal state even while the working title lags behind.
+				// In particular, do not synthesize another completion on clear.
+				if pane.Command == "uah" {
+					pane.AIBusy = false
+					pane.AIInput = false
+					c.prevPaneBusy[pid] = false
+					c.prevPaneTitle[pid] = pane.Title
+					delete(c.hookPaneBusyIdleAt, pid)
+					continue
+				}
 				if c.prevPaneBusy[pid] {
 					coordinatorDebugLog.Printf("[AI] Pane %s (win %d, %s): BUSY -> IDLE (hook)",
 						pid, idx, pane.Command)
